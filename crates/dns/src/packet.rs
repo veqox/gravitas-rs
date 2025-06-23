@@ -1,57 +1,63 @@
-use crate::header::Header;
-use crate::proto::{Parse, ParseError, Parser, Serialize, SerializeError, Serializer};
-use crate::question::Question;
-use crate::rr::ResourceRecord;
+use log::warn;
 
-/// DNS packet layout as per [RFC 1035 Section 4.1](https://www.rfc-editor.org/rfc/rfc1035#section-4.1)
-///
-/// ```text
-/// +---------------------+
-/// |        Header       |
-/// +---------------------+
-/// |       Question      | the question for the name server
-/// +---------------------+
-/// |        Answer       | RRs answering the question
-/// +---------------------+
-/// |      Authority      | RRs pointing toward an authority
-/// +---------------------+
-/// |      Additional     | RRs holding additional information
-/// +---------------------+
-/// ```
+use crate::{
+    header::Header,
+    proto::{
+        CodecError,
+        decoder::{Decode, Decoder},
+    },
+    question::Question,
+    record::Record,
+};
+
 #[derive(Debug)]
-pub struct Packet<'a> {
+pub struct Packet {
+    buf: [u8; 4096],
+
     pub header: Header,
-    pub questions: Vec<Question<'a>>,
-    pub answers: Vec<ResourceRecord<'a>>,
-    pub authorities: Vec<ResourceRecord<'a>>,
-    pub additionals: Vec<ResourceRecord<'a>>,
+    pub questions: Vec<Question>,
+    pub answers: Vec<Record>,
+    pub authorities: Vec<Record>,
+    pub additionals: Vec<Record>,
 }
 
-impl<'a> Parse<'a> for Packet<'a> {
-    fn parse(parser: &mut Parser<'a>) -> Result<Self, ParseError> {
-        let header = Header::parse(parser)?;
+impl Packet {
+    pub fn from_buf(buf: &[u8]) -> Result<Self, CodecError> {
+        let decoder = &mut Decoder::new(&buf[..len]);
 
-        let mut questions = Vec::with_capacity(header.qdcount.into());
-        for _ in 0..header.qdcount {
-            questions.push(Question::parse(parser)?);
+        let header = Header::decode(decoder)?;
+
+        let qdcount = decoder.read_u16()?;
+        let ancount = decoder.read_u16()?;
+        let nscount = decoder.read_u16()?;
+        let arcount = decoder.read_u16()?;
+
+        let mut questions = Vec::with_capacity(qdcount.into());
+        for _ in 0..qdcount {
+            questions.push(Question::decode(decoder)?);
         }
 
-        let mut answers = Vec::with_capacity(header.ancount.into());
-        for _ in 0..header.ancount {
-            answers.push(ResourceRecord::parse(parser)?);
+        let mut answers = Vec::with_capacity(ancount.into());
+        for _ in 0..ancount {
+            answers.push(Record::decode(decoder)?);
         }
 
-        let mut authorities = Vec::with_capacity(header.nscount.into());
-        for _ in 0..header.nscount {
-            authorities.push(ResourceRecord::parse(parser)?);
+        let mut authorities = Vec::with_capacity(nscount.into());
+        for _ in 0..nscount {
+            authorities.push(Record::decode(decoder)?);
         }
 
-        let mut additionals = Vec::with_capacity(header.arcount.into());
-        for _ in 0..header.arcount {
-            additionals.push(ResourceRecord::parse(parser)?);
+        let mut additionals = Vec::with_capacity(arcount.into());
+        for _ in 0..arcount {
+            additionals.push(Record::decode(decoder)?);
         }
 
-        Ok(Packet {
+        if decoder.remaining() > 0 {
+            warn!("packet not read to end")
+        }
+
+        Ok(Self {
+            buf,
             header,
             questions,
             answers,
@@ -59,28 +65,9 @@ impl<'a> Parse<'a> for Packet<'a> {
             additionals,
         })
     }
-}
 
-impl<'a> Serialize<'a> for Packet<'a> {
-    fn serialize(self, serializer: &mut Serializer<'a>) -> Result<usize, SerializeError> {
-        self.header.serialize(serializer)?;
-
-        for question in self.questions {
-            question.serialize(serializer)?;
-        }
-
-        for answers in self.answers {
-            answers.serialize(serializer)?;
-        }
-
-        for authority in self.authorities {
-            authority.serialize(serializer)?;
-        }
-
-        for additional in self.additionals {
-            additional.serialize(serializer)?;
-        }
-
-        Ok(serializer.position())
+    pub fn add_answers(&mut self, answers: Vec<Record>) {
+        let answer_start =
+            self.header.size() + self.questions.iter().map(|q| q.size()).sum::<usize>();
     }
 }

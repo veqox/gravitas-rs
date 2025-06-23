@@ -1,9 +1,13 @@
-use std::fmt::Debug;
+use std::{f64::NAN, fmt::Debug};
 
 use crate::{
-    DomainName,
-    class::Class,
-    proto::{Parse, ParseError, Parser, Serialize, SerializeError, Serializer},
+    class::{self, Class},
+    domain::Domain,
+    proto::{
+        CodecError,
+        decoder::{Decode, Decoder},
+        encoder::{Encode, Encoder},
+    },
     r#type::Type,
 };
 
@@ -22,28 +26,34 @@ use crate::{
 /// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 /// ```
 #[derive(Debug)]
-pub struct Question<'a> {
-    pub name: DomainName<'a>,
+pub struct Question {
+    pub name: Domain,
     pub r#type: Type,
     pub class: Class,
 }
 
-impl<'a> Parse<'a> for Question<'a> {
-    fn parse(parser: &mut Parser<'a>) -> Result<Self, ParseError> {
+impl Question {
+    pub fn size(&self) -> usize {
+        self.name.size() + size_of::<Type>() + size_of::<Class>()
+    }
+}
+
+impl<'a> Decode<'a> for Question {
+    fn decode(decoder: &mut Decoder<'a>) -> Result<Self, CodecError> {
         Ok(Question {
-            name: DomainName::parse(parser)?,
-            r#type: parser.consume_u16()?.into(),
-            class: parser.consume_u16()?.into(),
+            name: Domain::decode(decoder)?,
+            r#type: decoder.read_u16()?.into(),
+            class: decoder.read_u16()?.into(),
         })
     }
 }
 
-impl<'a> Serialize<'a> for Question<'a> {
-    fn serialize(self, serializer: &mut Serializer<'a>) -> Result<usize, SerializeError> {
-        self.name.serialize(serializer)?;
-        serializer.write_u16(self.r#type.into())?;
-        serializer.write_u16(self.class.into())?;
+impl<'a> Encode<'a> for Question {
+    fn encode(self, encoder: &mut Encoder<'a>) -> Result<(), CodecError> {
+        self.name.encode(encoder)?;
+        encoder.write_u16(self.r#type.into())?;
+        encoder.write_u16(self.class.into())?;
 
-        Ok(serializer.position())
+        Ok(())
     }
 }

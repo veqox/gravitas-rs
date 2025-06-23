@@ -1,9 +1,18 @@
-mod parser;
-mod serializer;
+use std::{error::Error, fmt::Display};
 
-pub use crate::proto::parser::Parse;
-pub use crate::proto::parser::ParseError;
-pub use crate::proto::parser::Parser;
-pub use crate::proto::serializer::Serialize;
-pub use crate::proto::serializer::SerializeError;
-pub use crate::proto::serializer::Serializer;
+pub mod decoder;
+pub mod encoder;
+
+#[derive(Debug)]
+pub enum CodecError {
+    BufferOverflow(usize, usize),
+    FormatError,
+}
+
+impl Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for CodecError {}

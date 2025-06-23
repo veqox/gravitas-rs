@@ -1,8 +1,12 @@
 use log::warn;
 
-use crate::proto::{Parse, ParseError, Parser, Serialize, SerializeError, Serializer};
+use crate::proto::{
+    CodecError,
+    decoder::{Decode, Decoder},
+    encoder::{Encode, Encoder},
+};
 
-/// DNS header field layout as per [RFC 1035 Section 4.1.1](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
+/// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
 ///
 /// ```text
 ///   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -24,40 +28,34 @@ use crate::proto::{Parse, ParseError, Parser, Serialize, SerializeError, Seriali
 pub struct Header {
     pub id: u16,
     pub flags: Flags,
-    pub qdcount: u16,
-    pub ancount: u16,
-    pub nscount: u16,
-    pub arcount: u16,
 }
 
-impl<'a> Parse<'_> for Header {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseError> {
+impl Header {
+    pub fn size(&self) -> usize {
+        12
+    }
+}
+
+impl<'a> Encode<'a> for Header {
+    fn encode(self, encoder: &mut Encoder<'a>) -> Result<(), CodecError> {
+        encoder.write_u16(self.id)?;
+        self.flags.encode(encoder)?;
+
+        Ok(())
+    }
+}
+
+impl<'a> Decode<'a> for Header {
+    fn decode(decoder: &mut Decoder<'a>) -> Result<Self, CodecError> {
         Ok(Header {
-            id: parser.consume_u16()?,
-            flags: parser.consume_u16()?.into(),
-            qdcount: parser.consume_u16()?,
-            ancount: parser.consume_u16()?,
-            nscount: parser.consume_u16()?,
-            arcount: parser.consume_u16()?,
+            id: decoder.read_u16()?,
+            flags: Flags::decode(decoder)?,
         })
     }
 }
 
-impl<'a> Serialize<'a> for Header {
-    fn serialize(self, serializer: &mut Serializer<'a>) -> Result<usize, SerializeError> {
-        serializer.write_u16(self.id)?;
-        serializer.write_u16(self.flags.into())?;
-        serializer.write_u16(self.qdcount)?;
-        serializer.write_u16(self.ancount)?;
-        serializer.write_u16(self.nscount)?;
-        serializer.write_u16(self.arcount)?;
-
-        Ok(serializer.position())
-    }
-}
-
-/// DNS flags field layout as per [RFC 1035 Section 4.1.1](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
-/// and [RFC 2535 Section 6.1](https://www.rfc-editor.org/rfc/rfc2535#section-6.1).
+/// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
+/// [RFC 2535](https://www.rfc-editor.org/rfc/rfc2535#section-6.1)
 ///
 /// ```text
 ///   0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -67,70 +65,75 @@ impl<'a> Serialize<'a> for Header {
 /// ```
 #[derive(Debug)]
 pub struct Flags {
-    pub qr: u8,         // 1 bit
-    pub opcode: OpCode, // 4 bits
-    pub aa: u8,         // 1 bit
-    pub tc: u8,         // 1 bit
-    pub rd: u8,         // 1 bit
-    pub ra: u8,         // 1 bit
-    pub z: u8,          // 1 bit
-    pub ad: u8,         // 1 bit
-    pub cd: u8,         // 1 bit
-    pub rcode: RCode,   // 4 bits
+    pub message_type: MessageType,
+    pub op_code: OpCode,
+    pub authorative_answer: bool,
+    pub truncation: bool,
+    pub recursion_desired: bool,
+    pub recursion_available: bool,
+    pub authentic_data: bool,
+    pub checking_disabled: bool,
+    pub response_code: RCode,
 }
 
-impl From<u16> for Flags {
-    fn from(value: u16) -> Self {
-        Flags {
-            qr: ((value >> 15) & 0b1) as u8,
-            opcode: (((value >> 11) & 0b1111) as u8).into(),
-            aa: ((value >> 10) & 0b1) as u8,
-            tc: ((value >> 9) & 0b1) as u8,
-            rd: ((value >> 8) & 0b1) as u8,
-            ra: ((value >> 7) & 0b1) as u8,
-            z: ((value >> 6) & 0b1) as u8,
-            ad: ((value >> 5) & 0b1) as u8,
-            cd: ((value >> 4) & 0b1) as u8,
-            rcode: (value & 0b1111).into(),
+impl<'a> Decode<'a> for Flags {
+    fn decode(decoder: &mut Decoder<'a>) -> Result<Self, CodecError> {
+        let flags = decoder.read_u16()?;
+
+        if flags >> 6 & 0b1 != 0 {
+            warn!("DNS query received with non-zero z flag");
         }
+
+        Ok(Flags {
+            message_type: match flags >> 15 & 0b1 == 1 {
+                false => MessageType::Question,
+                true => MessageType::Response,
+            },
+            op_code: ((flags >> 11 & 0b1111) as u8).into(),
+            authorative_answer: flags >> 10 & 0b1 == 1,
+            truncation: flags >> 9 & 0b1 == 1,
+            recursion_desired: flags >> 8 & 0b1 == 1,
+            recursion_available: flags >> 7 & 0b1 == 1,
+            authentic_data: flags >> 6 & 0b1 == 1,
+            checking_disabled: flags >> 6 & 0b1 == 1,
+            response_code: ((flags >> 6 & 0b1) as u8).into(),
+        })
     }
 }
 
-impl From<Flags> for u16 {
-    fn from(val: Flags) -> Self {
-        let mut value = 0u16;
-        value |= (val.qr as u16) << 15;
-        value |= (u8::from(val.opcode) as u16 & 0b1111) << 11;
-        value |= (val.aa as u16) << 10;
-        value |= (val.tc as u16) << 9;
-        value |= (val.rd as u16) << 8;
-        value |= (val.ra as u16) << 7;
-        value |= (val.z as u16) << 6;
-        value |= (val.ad as u16) << 5;
-        value |= (val.cd as u16) << 4;
-        value |= val.rcode.low() as u16;
-        value
+impl<'a> Encode<'a> for Flags {
+    fn encode(self, encoder: &mut Encoder<'a>) -> Result<(), CodecError> {
+        encoder.write_u16({
+            let mut flags = 0;
+            flags |= (self.message_type as u16) << 15;
+            flags |= (u8::from(self.op_code) as u16 & 0b1111) << 11;
+            flags |= (self.authentic_data as u16) << 10;
+            flags |= (self.truncation as u16) << 9;
+            flags |= (self.recursion_desired as u16) << 8;
+            flags |= (self.recursion_available as u16) << 7;
+            flags |= (self.authentic_data as u16) << 5;
+            flags |= (self.checking_disabled as u16) << 4;
+            flags |= u8::from(self.response_code) as u16;
+            flags
+        })?;
+
+        Ok(())
     }
+}
+
+#[derive(Debug)]
+pub enum MessageType {
+    Question,
+    Response,
 }
 
 #[derive(Debug)]
 #[repr(u8)]
 pub enum OpCode {
-    /// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
     Query,
-
-    /// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
     Status,
-
-    /// [RFC 1996](https://www.rfc-editor.org/rfc/rfc1996)
     Notify,
-
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136#section-1)
     Update,
-
-    /// [RFC 8490](https://www.rfc-editor.org/rfc/rfc8490#section-5.4)
-    DSO,
-
     Unknown(u8),
 }
 
@@ -141,7 +144,6 @@ impl From<u8> for OpCode {
             2 => Self::Status,
             4 => Self::Notify,
             5 => Self::Update,
-            6 => Self::DSO,
             _ => {
                 warn!("unknown value for opcode {}", value);
                 Self::Unknown(value)
@@ -157,14 +159,13 @@ impl From<OpCode> for u8 {
             OpCode::Status => 2,
             OpCode::Notify => 4,
             OpCode::Update => 5,
-            OpCode::DSO => 6,
             OpCode::Unknown(x) => x,
         }
     }
 }
 
 #[derive(Debug)]
-#[repr(u16)]
+#[repr(u8)]
 pub enum RCode {
     /// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
     NoError,
@@ -184,68 +185,11 @@ pub enum RCode {
     /// [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035#section-4.1.1)
     Refused,
 
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136)
-    YXDomain,
-
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136)
-    YXRRSet,
-
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136)
-    NXRRSet,
-
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136)
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    NotAuth,
-
-    /// [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136)
-    NotZone,
-
-    /// [RFC 8490](https://www.rfc-editor.org/rfc/rfc8490)
-    DSOTYPENI,
-
-    /// [RFC 6891](https://www.rfc-editor.org/rfc/rfc6891)
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    BADVERS,
-
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    BADSIG,
-
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    BADKEY,
-
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    BADTIME,
-
-    /// [RFC 2930](https://www.rfc-editor.org/rfc/rfc2930)
-    BADMODE,
-
-    /// [RFC 2930](https://www.rfc-editor.org/rfc/rfc2930)
-    BADNAME,
-
-    /// [RFC 2930](https://www.rfc-editor.org/rfc/rfc2930)
-    BADALG,
-
-    /// [RFC 8945](https://www.rfc-editor.org/rfc/rfc8945)
-    BADTRUNC,
-
-    /// [RFC 7873](https://www.rfc-editor.org/rfc/rfc7873)
-    BADCOOKIE,
-
-    Unknown(u16),
+    Unknown(u8),
 }
 
-impl RCode {
-    pub fn low(self) -> u8 {
-        (u16::from(self) & 0x000F) as u8
-    }
-
-    pub fn high(self) -> u8 {
-        (u16::from(self) & 0x0FF0) as u8
-    }
-}
-
-impl From<u16> for RCode {
-    fn from(value: u16) -> Self {
+impl From<u8> for RCode {
+    fn from(value: u8) -> Self {
         match value {
             0 => Self::NoError,
             1 => Self::FormatErr,
@@ -253,26 +197,12 @@ impl From<u16> for RCode {
             3 => Self::NXDomain,
             4 => Self::NotImp,
             5 => Self::Refused,
-            6 => Self::YXDomain,
-            7 => Self::YXRRSet,
-            8 => Self::NXRRSet,
-            9 => Self::NotAuth,
-            10 => Self::NotZone,
-            11 => Self::DSOTYPENI,
-            16 => Self::BADSIG,
-            17 => Self::BADKEY,
-            18 => Self::BADTIME,
-            19 => Self::BADMODE,
-            20 => Self::BADNAME,
-            21 => Self::BADALG,
-            22 => Self::BADTRUNC,
-            23 => Self::BADCOOKIE,
             other => Self::Unknown(other),
         }
     }
 }
 
-impl From<RCode> for u16 {
+impl From<RCode> for u8 {
     fn from(val: RCode) -> Self {
         match val {
             RCode::NoError => 0,
@@ -281,20 +211,6 @@ impl From<RCode> for u16 {
             RCode::NXDomain => 3,
             RCode::NotImp => 4,
             RCode::Refused => 5,
-            RCode::YXDomain => 6,
-            RCode::YXRRSet => 7,
-            RCode::NXRRSet => 8,
-            RCode::NotAuth => 9,
-            RCode::NotZone => 10,
-            RCode::DSOTYPENI => 11,
-            RCode::BADVERS | RCode::BADSIG => 16,
-            RCode::BADKEY => 17,
-            RCode::BADTIME => 18,
-            RCode::BADMODE => 19,
-            RCode::BADNAME => 20,
-            RCode::BADALG => 21,
-            RCode::BADTRUNC => 22,
-            RCode::BADCOOKIE => 23,
             RCode::Unknown(x) => x,
         }
     }

@@ -1,11 +1,12 @@
 use std::net::UdpSocket;
-use std::time::Instant;
 
 use dns::{
-    Packet,
-    proto::{Parse, Parser, Serialize, Serializer},
+    domain::{Domain, Label},
+    header::MessageType,
+    packet::Packet,
+    record::Record,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 
 const LISTEN_ADDR: &str = "0.0.0.0:5300";
 
@@ -13,10 +14,9 @@ fn main() {
     env_logger::init();
 
     let socket = UdpSocket::bind(LISTEN_ADDR).expect("couldn't bind to address");
+    info!("listening on {}", LISTEN_ADDR);
 
     let mut buf = [0; 4096];
-
-    info!("listening on {}", LISTEN_ADDR);
 
     loop {
         let (len, addr) = match socket.recv_from(&mut buf) {
@@ -29,11 +29,16 @@ fn main() {
 
         debug!("received {} bytes from {}", len, addr.ip());
 
-        let start = Instant::now();
+        debug!(
+            "{:#?}",
+            &buf[..len]
+                .iter()
+                .enumerate()
+                .map(|(i, x)| (i, *x as char))
+                .collect::<Vec<_>>()
+        );
 
-        let mut parser = Parser::new(&buf[..len]);
-
-        let packet = match Packet::parse(&mut parser) {
+        let packet = match Packet::from_buf(&buf[..len]) {
             Err(err) => {
                 error!("failed to parse packet {:?}", err);
                 continue;
@@ -41,29 +46,42 @@ fn main() {
             Ok(packet) => packet,
         };
 
-        if parser.remaining() > 0 {
-            warn!("{} bytes left in buffer", parser.remaining());
-        }
+        debug!("{:#?}", packet);
 
-        debug!("packet parsed in {:?}", start.elapsed());
+        let response = {
+            packet.header.flags.message_type = MessageType::Response;
+            packet.answers.push(Record::Record {
+                name: Domain {
+                    labels: vec![Label {
+                        data:
+                    }],
+                },
+                r#type: (),
+                class: (),
+                ttl: (),
+                data: (),
+            });
 
-        debug!("{:?}", packet);
-
-        let mut serialize_buf = [0; 4096];
-
-        let serialize_len = match packet.serialize(&mut Serializer::new(&mut serialize_buf)) {
-            Err(err) => {
-                error!("failed to serialize packet {:?}", err);
-                continue;
-            }
-            Ok(len) => len,
+            packet
         };
 
-        if buf[..len] != serialize_buf[..serialize_len] {
-            error!("original:   {:?}", &buf[..len]);
-            error!("serialized: {:?}", &serialize_buf[..serialize_len]);
-        } else {
-            debug!("serialization successful: buffers match");
-        }
+        // let response = match packet.header.flags.recursion_desired {
+        //     true => {
+        //         let len = packet.write_to(&mut buf).unwrap();
+
+        //         _ = socket.send_to(&buf[..len], "");
+
+        //         let len = socket.recv(&mut buf).unwrap();
+
+        //         Packet::from_buf(&buf[..len]).unwrap()
+        //     }
+        //     false => {
+        //         todo!();
+        //     }
+        // };
+
+        let len = response.write_to(&mut buf).unwrap();
+
+        _ = socket.send_to(&buf[..len], addr);
     }
 }
