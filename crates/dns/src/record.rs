@@ -170,7 +170,7 @@ pub enum RecordData {
 impl<'a> RecordData {
     fn size(&self) -> usize {
         match self {
-            RecordData::A { address } => address.len,
+            RecordData::A { address } => address.len(),
             RecordData::NS { nsdname } => nsdname.size(),
             RecordData::CNAME { cname } => cname.size(),
             RecordData::SOA {
@@ -195,9 +195,9 @@ impl<'a> RecordData {
                 preference,
                 exchange,
             } => size_of_val(preference) + exchange.size(),
-            RecordData::TXT { text } => text.len,
-            RecordData::AAAA { address } => address.len,
-            RecordData::Unknown { data } => data.len,
+            RecordData::TXT { text } => text.len(),
+            RecordData::AAAA { address } => address.len(),
+            RecordData::Unknown { data } => data.len(),
         }
     }
 }
@@ -215,12 +215,12 @@ impl<'a> Decode<'a> for Record {
                 size: class,
                 flags: ttl,
                 options: {
-                    let data = Span {
+                    let data = Span::Ref {
                         start: decoder.position(),
                         len: rd_length,
                     };
 
-                    decoder.seek(decoder.position() + data.len)?;
+                    decoder.seek(decoder.position() + data.len())?;
 
                     data
                 },
@@ -229,12 +229,12 @@ impl<'a> Decode<'a> for Record {
                 let data = match r#type {
                     Type::A => RecordData::A {
                         address: {
-                            let data = Span {
+                            let data = Span::Ref {
                                 start: decoder.position(),
                                 len: rd_length,
                             };
 
-                            decoder.seek(decoder.position() + data.len)?;
+                            decoder.seek(decoder.position() + data.len())?;
 
                             data
                         },
@@ -263,24 +263,24 @@ impl<'a> Decode<'a> for Record {
                     },
                     Type::TXT => RecordData::TXT {
                         text: {
-                            let data = Span {
+                            let data = Span::Ref {
                                 start: decoder.position(),
                                 len: rd_length,
                             };
 
-                            decoder.seek(decoder.position() + data.len)?;
+                            decoder.seek(decoder.position() + data.len())?;
 
                             data
                         },
                     },
                     Type::AAAA => RecordData::AAAA {
                         address: {
-                            let data = Span {
+                            let data = Span::Ref {
                                 start: decoder.position(),
                                 len: rd_length,
                             };
 
-                            decoder.seek(decoder.position() + data.len)?;
+                            decoder.seek(decoder.position() + data.len())?;
 
                             data
                         },
@@ -288,12 +288,12 @@ impl<'a> Decode<'a> for Record {
                     Type::OPT => unreachable!(),
                     Type::Unknown(_) => RecordData::Unknown {
                         data: {
-                            let data = Span {
+                            let data = Span::Ref {
                                 start: decoder.position(),
                                 len: rd_length,
                             };
 
-                            decoder.seek(decoder.position() + data.len)?;
+                            decoder.seek(decoder.position() + data.len())?;
 
                             data
                         },
@@ -329,7 +329,10 @@ impl<'a> Encode<'a> for Record {
                 encoder.write_u16(data.size() as u16)?;
 
                 match data {
-                    RecordData::A { address } => encoder.copy_within(address.start, address.len)?,
+                    RecordData::A { address } => match address {
+                        Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                        Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+                    },
                     RecordData::NS { nsdname } => nsdname.encode(encoder)?,
                     RecordData::CNAME { cname } => cname.encode(encoder)?,
                     RecordData::SOA {
@@ -357,11 +360,18 @@ impl<'a> Encode<'a> for Record {
                         encoder.write_u16(preference)?;
                         exchange.encode(encoder)?;
                     }
-                    RecordData::TXT { text } => encoder.copy_within(text.start, text.len)?,
-                    RecordData::AAAA { address } => {
-                        encoder.copy_within(address.start, address.len)?
-                    }
-                    RecordData::Unknown { data } => encoder.copy_within(data.start, data.len)?,
+                    RecordData::TXT { text } => match text {
+                        Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                        Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+                    },
+                    RecordData::AAAA { address } => match address {
+                        Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                        Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+                    },
+                    RecordData::Unknown { data } => match data {
+                        Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                        Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+                    },
                 }
             }
             Record::OPTRecord {
@@ -373,8 +383,12 @@ impl<'a> Encode<'a> for Record {
                 encoder.write_u16(Type::OPT.into())?;
                 encoder.write_u16(size)?;
                 encoder.write_u32(flags)?;
-                encoder.write_u16(options.len as u16)?;
-                encoder.copy_within(options.start, options.len)?;
+                encoder.write_u16(options.len() as u16)?;
+
+                match options {
+                    Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                    Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+                };
             }
         };
 

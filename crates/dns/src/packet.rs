@@ -1,6 +1,7 @@
 use log::warn;
 
 use crate::{
+    class::Class,
     header::Header,
     proto::{
         CodecError,
@@ -8,11 +9,12 @@ use crate::{
     },
     question::Question,
     record::Record,
+    r#type::Type,
 };
 
 #[derive(Debug)]
-pub struct Packet {
-    buf: [u8; 4096],
+pub struct Packet<'a> {
+    buf: &'a mut [u8; 4096],
 
     pub header: Header,
     pub questions: Vec<Question>,
@@ -21,9 +23,9 @@ pub struct Packet {
     pub additionals: Vec<Record>,
 }
 
-impl Packet {
-    pub fn from_buf(buf: &[u8]) -> Result<Self, CodecError> {
-        let decoder = &mut Decoder::new(&buf[..len]);
+impl<'a> Packet<'a> {
+    pub fn from_buf(buf: &'a mut [u8; 4096]) -> Result<Self, CodecError> {
+        let decoder = &mut Decoder::new(buf);
 
         let header = Header::decode(decoder)?;
 
@@ -66,7 +68,7 @@ impl Packet {
         })
     }
 
-    pub fn add_answers(&mut self, answers: Vec<Record>) {
+    pub fn add_answer(&mut self, answer: Record) {
         let answer_start =
             self.header.size() + self.questions.iter().map(|q| q.size()).sum::<usize>();
     }

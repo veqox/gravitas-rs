@@ -1,10 +1,13 @@
 use std::net::UdpSocket;
 
 use dns::{
+    class::Class,
     domain::{Domain, Label},
     header::MessageType,
     packet::Packet,
-    record::Record,
+    record::{Record, RecordData},
+    span::Span,
+    r#type::Type,
 };
 use log::{debug, error, info};
 
@@ -50,16 +53,22 @@ fn main() {
 
         let response = {
             packet.header.flags.message_type = MessageType::Response;
-            packet.answers.push(Record::Record {
+            packet.add_answer(Record::Record {
                 name: Domain {
                     labels: vec![Label {
-                        data:
+                        data: Span::Owned {
+                            data: "kurwa".as_bytes().to_vec().into_boxed_slice(),
+                        },
                     }],
                 },
-                r#type: (),
-                class: (),
-                ttl: (),
-                data: (),
+                r#type: Type::A,
+                class: Class::IN,
+                ttl: 3600,
+                data: RecordData::A {
+                    address: Span::Owned {
+                        data: vec![1, 1, 1, 1].into_boxed_slice(),
+                    },
+                },
             });
 
             packet

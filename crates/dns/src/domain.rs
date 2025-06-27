@@ -10,7 +10,7 @@ pub struct Domain {
 
 impl Domain {
     pub fn size(&self) -> usize {
-        self.labels.iter().map(|l| l.data.len + 1).sum()
+        self.labels.iter().map(|l| l.data.len() + 1).sum()
     }
 }
 
@@ -49,7 +49,7 @@ impl<'a> Decode<'a> for Vec<Label> {
                 }
                 1..=63 => {
                     let label = Label {
-                        data: Span {
+                        data: Span::Ref {
                             len,
                             start: decoder.position(),
                         },
@@ -76,8 +76,12 @@ impl<'a> Decode<'a> for Domain {
 impl<'a> Encode<'a> for Domain {
     fn encode(self, encoder: &mut Encoder<'a>) -> Result<(), CodecError> {
         for label in self.labels {
-            encoder.write_u8(label.data.len as u8)?;
-            encoder.copy_within(label.data.start, label.data.len)?;
+            encoder.write_u8(label.data.len() as u8)?;
+
+            match label.data {
+                Span::Ref { start, len } => encoder.copy_within(start, len)?,
+                Span::Owned { data } => encoder.write_bytes(data.as_ref())?,
+            }
         }
         encoder.write_u8(0)?;
 
